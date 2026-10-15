@@ -119,7 +119,14 @@ small{color:var(--muted);font-size:13px}
 
 .field{display:block;margin-bottom:12px}
 .field>span{display:block;font-size:13px;color:var(--muted);margin:0 2px 5px}
-input[type=text],input[type=number],input[type=date],textarea{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-size:16px;-webkit-appearance:none;appearance:none}
+.remrow{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.remrow:first-child{border-top:0;padding-top:0}
+.remrow label{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
+.remrow label span{display:block;font-size:15px}.remrow small{display:block}
+.remrow input[type=checkbox]{width:22px;height:22px;flex:none;accent-color:var(--acc);margin:0}
+.remrow input[type=time]{width:112px;flex:none;padding:8px 10px}
+.remrow.off label span{color:var(--muted)}
+input[type=text],input[type=number],input[type=date],input[type=time],textarea{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-size:16px;-webkit-appearance:none;appearance:none}
 input[type=date]{min-height:46px}
 textarea{resize:vertical;min-height:150px;line-height:1.5}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -191,9 +198,21 @@ const tl = n => '₺' + Math.round(n).toLocaleString('tr-TR');
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = v => { const n = parseFloat(String(v).replace(/\s/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.')); return isFinite(n) ? n : NaN; };
 
+// Telefonun takvimine eklenen tekrarlı hatırlatmalar (sunucu gerekmez, bildirim takvimden gelir).
+const DEF_REMS = [
+  { id: 'supp',   t: '💊 Takviyelerini al',             time: '09:00', on: true,  freq: 'DAILY' },
+  { id: 'water',  t: '💧 Bir bardak su iç',              time: '11:00', on: true,  freq: 'DAILY' },
+  { id: 'water2', t: '💧 Su hedefine ne kadar kaldı?',  time: '16:00', on: true,  freq: 'DAILY' },
+  { id: 'sport',  t: '🏃 Spor zamanı',                  time: '18:30', on: true,  freq: 'DAILY' },
+  { id: 'metime', t: '🕯️ Me time: biraz kendine ayır',  time: '20:30', on: false, freq: 'DAILY' },
+  { id: 'read',   t: '📖 Kitap ve vaka okuma',          time: '21:30', on: true,  freq: 'DAILY' },
+  { id: 'day',    t: '🌙 Gününü Gün Gün\'de işaretle',  time: '22:30', on: true,  freq: 'DAILY' },
+  { id: 'save',   t: '💰 Bu ayın birikimini ayır',      time: '10:00', on: true,  freq: 'MONTHLY' },
+];
+
 function fresh() {
   return {
-    settings: { name: '', supps: DEF_SUPPS.slice(), waterGoal: 8, saveGoal: 0,
+    settings: { name: '', supps: DEF_SUPPS.slice(), waterGoal: 8, saveGoal: 0, reminders: DEF_REMS.map(r => ({ ...r })),
       quitDate: null, cigsPerDay: 0, packPrice: 0, packSize: 20, onboarded: false, hintClosed: false },
     days: {}, savings: [],
   };
@@ -376,6 +395,12 @@ function vSettings() {
   <h3>Birikim</h3><div class="card">
     <label class="field" style="margin:0"><span>Aylık birikim hedefi (₺)</span><input type="number" inputmode="decimal" data-set="saveGoal" value="${s.saveGoal || ''}" placeholder="örn. 5000"></label>
   </div>
+  <h3>Hatırlatmalar</h3><div class="card">
+    ${s.reminders.map(r => `<div class="remrow ${r.on ? '' : 'off'}"><label><input type="checkbox" data-remon="${r.id}" ${r.on ? 'checked' : ''}><span>${esc(r.t)}<small>${r.freq === 'MONTHLY' ? 'Her ayın 1\'inde' : 'Her gün'}</small></span></label>
+      <input type="time" data-rem="${r.id}" value="${r.time}"></div>`).join('')}
+    <div style="margin-top:12px"><button class="btn" data-act="ics">Hatırlatmaları takvime ekle</button></div>
+    <div class="note">Seçtiğin hatırlatmalar telefonunun takvimine her gün tekrarlanacak şekilde eklenir ve bildirim olarak gelir. Saatleri sonradan değiştirirsen takvimdeki eski “Gün Gün” etkinliklerini silip yeniden ekle.</div>
+  </div>
   <h3>Yedek</h3><div class="card"><div class="btns">
     <button class="btn soft" data-act="export">Yedeği kaydet</button>
     <button class="btn soft" data-act="import">Yedekten geri yükle</button>
@@ -430,6 +455,7 @@ function act(a, el) {
     }
     case 'saveDel': if (!confirm('Bu kaydı sileyim mi?')) return; S.savings = S.savings.filter(e => e.id !== +el.dataset.id); break;
     case 'export': exportData(); return;
+    case 'ics': addToCalendar(); return;
     case 'import': $('#importFile').click(); return;
     case 'reset':
       if (!confirm('Tüm kayıtlar silinecek. Emin misin?') || !confirm('Geri alınamaz. Gerçekten sıfırlayayım mı?')) return;
@@ -458,6 +484,13 @@ document.addEventListener('change', e => {
     if (v > 0) d[t.dataset.amt] = v; else delete d[t.dataset.amt];
     save(); return;
   }
+  if (t.dataset.rem || t.dataset.remon) {
+    const r = S.settings.reminders.find(x => x.id === (t.dataset.rem || t.dataset.remon));
+    if (!r) return;
+    if (t.dataset.remon) { r.on = t.checked; t.closest('.remrow').classList.toggle('off', !r.on); }
+    else if (/^\d{2}:\d{2}$/.test(t.value)) r.time = t.value;
+    save(); return;
+  }
   if (t.dataset.set) {
     const f = t.dataset.set; let v = t.value;
     if (f === 'supps') v = v.split('\n').map(x => x.trim()).filter(Boolean);
@@ -480,6 +513,37 @@ function exportData() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 3000);
 }
+// Seçili hatırlatmalardan tekrarlı etkinlikler içeren bir .ics takvim dosyası üretir.
+function icsText(rems) {
+  const ie = x => x.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const url = location.href.split('#')[0].split('?')[0];
+  const ts = d => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + 'T' + pad(d.getHours()) + pad(d.getMinutes()) + '00';
+  const L = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Gun Gun//TR', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:Gün Gün'];
+  const t = today();
+  for (const r of rems) {
+    const [hh, mm] = r.time.split(':').map(Number);
+    const start = r.freq === 'MONTHLY' ? new Date(t.getFullYear(), t.getMonth(), 1, hh, mm) : new Date(t.getFullYear(), t.getMonth(), t.getDate(), hh, mm);
+    const end = new Date(start.getTime() + 10 * 60000);
+    L.push('BEGIN:VEVENT', 'UID:gungun-' + r.id + '@gungun', 'DTSTAMP:' + stamp, 'DTSTART:' + ts(start), 'DTEND:' + ts(end),
+      'RRULE:' + (r.freq === 'MONTHLY' ? 'FREQ=MONTHLY;BYMONTHDAY=1' : 'FREQ=DAILY'),
+      'SUMMARY:' + ie(r.t), 'DESCRIPTION:' + ie('Gün Gün: ' + url), 'URL:' + url, 'TRANSP:TRANSPARENT',
+      'BEGIN:VALARM', 'ACTION:DISPLAY', 'DESCRIPTION:' + ie(r.t), 'TRIGGER:PT0M', 'END:VALARM', 'END:VEVENT');
+  }
+  L.push('END:VCALENDAR');
+  return L.join('\r\n') + '\r\n';
+}
+function addToCalendar() {
+  const rems = S.settings.reminders.filter(r => r.on);
+  if (!rems.length) { toast('En az bir hatırlatma seç'); return; }
+  const blob = new Blob([icsText(rems)], { type: 'text/calendar;charset=utf-8' });
+  const u = URL.createObjectURL(blob);
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent)) { location.href = u; return; }
+  const a = document.createElement('a'); a.href = u; a.download = 'gungun-hatirlatmalar.ics';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 3000);
+  toast('Dosyayı açıp takvimine ekle');
+}
+
 $('#importFile').addEventListener('change', async e => {
   const f = e.target.files[0]; e.target.value = '';
   if (!f) return;
